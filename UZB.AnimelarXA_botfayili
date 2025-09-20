@@ -2,7 +2,7 @@ import telebot
 import os
 from telebot import types
 
-TOKEN = os.environ.get("8472642513:AAFRs56wfsIQVUYSLjyjQN0CO3U0lUZZymk")  # Railway dagi TOKEN ni oladi
+TOKEN = os.environ.get("TOKEN")  # Railway dagi TOKEN ni oladi
 bot = telebot.TeleBot(TOKEN)
 
 # Anime ro'yxati (siz qo'lda to'ldirasiz)
