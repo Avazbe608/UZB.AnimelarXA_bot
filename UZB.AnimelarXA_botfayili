@@ -1,0 +1,59 @@
+import telebot
+import os
+from telebot import types
+
+TOKEN = os.environ.get("8472642513:AAFRs56wfsIQVUYSLjyjQN0CO3U0lUZZymk")  # Railway dagi TOKEN ni oladi
+bot = telebot.TeleBot(TOKEN)
+
+# Anime ro'yxati (siz qo'lda to'ldirasiz)
+anime_db = {
+    "110": {
+        "title": "Magi: Sehrli labirint",
+        "episodes": {
+            1: "https://example.com/magi_ep1.mp4",
+            2: "https://example.com/magi_ep2.mp4",
+        }
+    },
+    "120": {
+        "title": "Naruto",
+        "episodes": {
+            1: "https://example.com/naruto_ep1.mp4",
+            2: "https://example.com/naruto_ep2.mp4",
+        }
+    }
+}
+
+@bot.message_handler(commands=['start'])
+def start_cmd(message):
+    args = message.text.split()
+    if len(args) > 1:
+        anime_id = args[1]
+        if anime_id in anime_db:
+            anime = anime_db[anime_id]
+            kb = types.InlineKeyboardMarkup(row_width=5)
+            for ep in anime["episodes"]:
+                kb.add(types.InlineKeyboardButton(str(ep), callback_data=f"{anime_id}_{ep}"))
+            bot.send_message(message.chat.id,
+                             f"📺 {anime['title']} epizodlari:",
+                             reply_markup=kb)
+        else:
+            bot.send_message(message.chat.id, "❌ Anime topilmadi.")
+    else:
+        bot.send_message(message.chat.id, "Salom!\nAnime tanlash uchun kanal tugmasidan foydalaning.")
+
+@bot.callback_query_handler(func=lambda call: "_" in call.data)
+def callback_handler(call):
+    anime_id, ep_num = call.data.split("_")
+    anime = anime_db.get(anime_id)
+    if anime:
+        link = anime["episodes"].get(int(ep_num))
+        if link:
+            bot.send_message(call.message.chat.id,
+                             f"▶️ {anime['title']} - {ep_num}-qism\n{link}")
+        else:
+            bot.answer_callback_query(call.id, "Bunday epizod yo‘q")
+    else:
+        bot.answer_callback_query(call.id, "Xato ma’lumot")
+
+print("Bot ishga tushdi...")
+bot.infinity_polling()
