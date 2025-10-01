@@ -1,59 +1,289 @@
-import telebot
+# main.py
+import json
+import logging
 import os
-from telebot import types
+from typing import Dict, Any
 
-TOKEN = os.environ.get("TOKEN")  # Railway dagi TOKEN ni oladi
-bot = telebot.TeleBot(TOKEN)
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from dotenv import load_dotenv
 
-# Anime ro'yxati (siz qo'lda to'ldirasiz)
-anime_db = {
-    "110": {
-        "title": "Magi: Sehrli labirint",
-        "episodes": {
-            1: "https://example.com/magi_ep1.mp4",
-            2: "https://example.com/magi_ep2.mp4",
-        }
-    },
-    "120": {
-        "title": "Naruto",
-        "episodes": {
-            1: "https://example.com/naruto_ep1.mp4",
-            2: "https://example.com/naruto_ep2.mp4",
-        }
+load_dotenv()
+
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Environment / Config
+TOKEN = os.getenv("BOT_TOKEN")  # BotFather token
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # optional: your Telegram user id for admin commands
+DATA_FILE = os.getenv("DATA_FILE", "anime_data.json")
+
+if not TOKEN:
+    logger.error("BOT_TOKEN not set in environment. Put it into .env file or Replit secrets.")
+    raise SystemExit("BOT_TOKEN required")
+
+bot = Bot(token=TOKEN)
+dp = Dispatcher(bot)
+
+
+# --- Utility: load/save anime data ---
+def load_data() -> Dict[str, Any]:
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning("Data file not found, creating empty dataset.")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error("JSON decode error: %s", e)
+        return {}
+
+
+def save_data(data: Dict[str, Any]):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# --- Keyboard builders ---
+def parts_keyboard(slug: str, parts: list, per_row: int = 6) -> InlineKeyboardMarkup:
+    """
+    Create inline keyboard with numbered buttons from 1..N.
+    callback_data format: "anime|slug|part|<index>"
+    """
+    kb = InlineKeyboardMarkup(row_width=per_row)
+    buttons = []
+    for p in parts:
+        idx = p.get("index")
+        buttons.append(InlineKeyboardButton(text=str(idx), callback_data=f"anime|{slug}|part|{idx}"))
+    # chunk into rows (aiogram handles row_width, but we'll just add list)
+    kb.add(*buttons)
+    return kb
+
+
+def control_keyboard(slug: str) -> InlineKeyboardMarkup:
+    """
+    Optional extra keyboard: Back to channel, Share, etc.
+    """
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("📥 Kanalga qaytish", url=os.getenv("CHANNEL_URL", "https://t.me/YourChannel")))
+    kb.add(InlineKeyboardButton("🔗 Kanal postga o‘tish", url=f"{os.getenv('CHANNEL_POST_URL','https://t.me/YourChannel')}"))
+    return kb
+
+
+# --- Handlers ---
+@dp.message_handler(commands=["start"])
+async def cmd_start(message: types.Message):
+    """
+    /start [slug] — if slug present, show that anime
+    """
+    args = message.get_args().strip()
+    data = load_data()
+    if not args:
+        # no param: show list of available anime
+        if not data:
+            await message.answer("Salom! Hozircha hech qanday anime mavjud emas.")
+            return
+
+        text = "Salom! Kanalimizdagi animelar roʻyxati:\n\n"
+        for key, an in data.items():
+            text += f"• {an.get('title')} — /anime_{an.get('slug')}\n"
+        text += "\nKerakli anime nomini tanlang yoki `t.me/YourBot?start=slug` orqali kiriting."
+        await message.answer(text)
+        return
+
+    slug = args.split()[0]
+    anime = data.get(slug)
+    if not anime:
+        await message.answer("Kechirasiz, bunday animeni topa olmadim. Iltimos slug to‘g‘ri ekanligini tekshiring.")
+        return
+
+    # Send main anime card: image + caption + parts keyboard
+    caption = f"{anime.get('title')}\n\n{anime.get('short_info','')}"
+    parts = anime.get("parts", [])
+    kb = parts_keyboard(slug, parts)
+    # optionally add control buttons under
+    try:
+        await message.answer_photo(photo=anime.get("image"), caption=caption, reply_markup=kb)
+    except Exception as e:
+        # If image fails, send text fallback
+        logger.exception("Sending photo failed: %s", e)
+        await message.answer(caption, reply_markup=kb)
+
+
+@dp.message_handler(lambda m: m.text and m.text.startswith("/anime_"))
+async def cmd_quick_anime(message: types.Message):
+    # helper: /anime_slug commands shown in /start
+    slug = message.text.replace("/anime_", "").strip()
+    data = load_data()
+    anime = data.get(slug)
+    if not anime:
+        await message.answer("Bunday animeni topa olmadim.")
+        return
+    caption = f"{anime.get('title')}\n\n{anime.get('short_info','')}"
+    kb = parts_keyboard(slug, anime.get("parts", []))
+    try:
+        await message.answer_photo(photo=anime.get("image"), caption=caption, reply_markup=kb)
+    except:
+        await message.answer(caption, reply_markup=kb)
+
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith("anime|"))
+async def cb_anime_parts(callback_query: types.CallbackQuery):
+    """
+    callback_data: anime|<slug>|part|<index>
+    """
+    data = load_data()
+    parts = callback_query.data.split("|")
+    if len(parts) != 4:
+        await callback_query.answer("Noto'g'ri ma'lumot.", show_alert=True)
+        return
+    _tag, slug, _what, idx = parts
+    anime = data.get(slug)
+    if not anime:
+        await callback_query.answer("Anime topilmadi.", show_alert=True)
+        return
+
+    # find the part
+    try:
+        idx_int = int(idx)
+    except:
+        await callback_query.answer("Noto'g'ri qism raqami.", show_alert=True)
+        return
+
+    part_obj = next((p for p in anime.get("parts", []) if int(p.get("index")) == idx_int), None)
+    if not part_obj:
+        await callback_query.answer("Bu qism topilmadi.", show_alert=True)
+        return
+
+    # A) agar video_url mavjud bo'lsa — yubor (Telegram send_video can take URL)
+    video_url = part_obj.get("video_url")
+    caption = f"{anime.get('title')} — {part_obj.get('title')}\n\n{part_obj.get('description','')}"
+    try:
+        if video_url:
+            # Use send_video with URL (Telegram will try to fetch it)
+            await callback_query.message.answer_video(video=video_url, caption=caption)
+        else:
+            # fallback: if no URL, maybe text link
+            link = part_obj.get("link") or part_obj.get("file_url")
+            if link:
+                await callback_query.message.answer(f"{caption}\n\n🔗 Link: {link}")
+            else:
+                await callback_query.message.answer("Qo'shilgan qism uchun video mavjud emas.")
+    except Exception as e:
+        logger.exception("Failed to send video: %s", e)
+        # fallback to sending link text
+        if video_url:
+            await callback_query.message.answer(f"{caption}\n\n🔗 Video link: {video_url}")
+        else:
+            await callback_query.message.answer("Xatolik yuz berdi, admin bilan bog'laning.")
+
+    await callback_query.answer()  # remove 'loading' state
+
+
+# --- Admin commands (optional) ---
+@dp.message_handler(commands=["add_anime"])
+async def admin_add_anime(message: types.Message):
+    """
+    Simple admin command:
+    /add_anime <slug> | <Title> | <image_url> | <short_info>
+    Example:
+    /add_anime gachikuta | Gachikuta | https://.../img.jpg | Bu anime haqida qisqacha.
+    """
+    if ADMIN_ID and message.from_user.id != ADMIN_ID:
+        await message.answer("Siz admin emassiz.")
+        return
+
+    text = message.get_args()
+    if not text:
+        await message.answer("Format: /add_anime <slug> | <Title> | <image_url> | <short_info>")
+        return
+
+    parts = [p.strip() for p in text.split("|")]
+    if len(parts) < 4:
+        await message.answer("Toʻliq maʼlumot bering: slug | title | image_url | short_info")
+        return
+
+    slug, title, image_url, short_info = parts[:4]
+    data = load_data()
+    if slug in data:
+        await message.answer("Bu slug mavjud, boshqa slug tanlang yoki yangilang.")
+        return
+
+    data[slug] = {
+        "slug": slug,
+        "title": title,
+        "image": image_url,
+        "short_info": short_info,
+        "parts": []
     }
-}
+    save_data(data)
+    await message.answer(f"Anime '{title}' qo'shildi (slug: {slug}).")
 
-@bot.message_handler(commands=['start'])
-def start_cmd(message):
-    args = message.text.split()
-    if len(args) > 1:
-        anime_id = args[1]
-        if anime_id in anime_db:
-            anime = anime_db[anime_id]
-            kb = types.InlineKeyboardMarkup(row_width=5)
-            for ep in anime["episodes"]:
-                kb.add(types.InlineKeyboardButton(str(ep), callback_data=f"{anime_id}_{ep}"))
-            bot.send_message(message.chat.id,
-                             f"📺 {anime['title']} epizodlari:",
-                             reply_markup=kb)
-        else:
-            bot.send_message(message.chat.id, "❌ Anime topilmadi.")
-    else:
-        bot.send_message(message.chat.id, "Salom!\nAnime tanlash uchun kanal tugmasidan foydalaning.")
 
-@bot.callback_query_handler(func=lambda call: "_" in call.data)
-def callback_handler(call):
-    anime_id, ep_num = call.data.split("_")
-    anime = anime_db.get(anime_id)
-    if anime:
-        link = anime["episodes"].get(int(ep_num))
-        if link:
-            bot.send_message(call.message.chat.id,
-                             f"▶️ {anime['title']} - {ep_num}-qism\n{link}")
-        else:
-            bot.answer_callback_query(call.id, "Bunday epizod yo‘q")
-    else:
-        bot.answer_callback_query(call.id, "Xato ma’lumot")
+@dp.message_handler(commands=["add_part"])
+async def admin_add_part(message: types.Message):
+    """
+    Add part for anime:
+    /add_part <slug> | <index> | <title> | <video_url> | <optional description>
+    Example:
+    /add_part gachikuta | 1 | 1-qism | https://.../ep1.mp4 | Qo'shimcha ma'lumot
+    """
+    if ADMIN_ID and message.from_user.id != ADMIN_ID:
+        await message.answer("Siz admin emassiz.")
+        return
 
-print("Bot ishga tushdi...")
-bot.infinity_polling()
+    text = message.get_args()
+    if not text:
+        await message.answer("Format: /add_part <slug> | <index> | <title> | <video_url> | <description?>")
+        return
+
+    parts = [p.strip() for p in text.split("|")]
+    if len(parts) < 4:
+        await message.answer("Toʻliq maʼlumot bering.")
+        return
+
+    slug, index, title, video_url = parts[:4]
+    desc = parts[4] if len(parts) > 4 else ""
+    data = load_data()
+    anime = data.get(slug)
+    if not anime:
+        await message.answer("Bunday slug topilmadi.")
+        return
+
+    # add part (replace if same index exists)
+    try:
+        idx_int = int(index)
+    except:
+        await message.answer("Index butun son bo'lishi kerak.")
+        return
+
+    # remove existing with same index
+    anime_parts = anime.get("parts", [])
+    anime_parts = [p for p in anime_parts if int(p.get("index")) != idx_int]
+    anime_parts.append({"index": idx_int, "title": title, "video_url": video_url, "description": desc})
+    # sort by index
+    anime_parts = sorted(anime_parts, key=lambda x: int(x.get("index")))
+    anime["parts"] = anime_parts
+    data[slug] = anime
+    save_data(data)
+    await message.answer(f"{slug} uchun {index}-qism qo'shildi.")
+
+
+@dp.message_handler(commands=["list_anime"])
+async def admin_list(message: types.Message):
+    data = load_data()
+    if not data:
+        await message.answer("Hech narsa yo'q.")
+        return
+    text = " mavjud animelar:\n\n"
+    for k, v in data.items():
+        text += f"- {v.get('title')} (slug: {k}) — qismlar: {len(v.get('parts', []))}\n"
+    await message.answer(text)
+
+
+# --- Run bot ---
+if __name__ == "__main__":
+    logger.info("Starting bot...")
+    executor.start_polling(dp, skip_updates=True)
