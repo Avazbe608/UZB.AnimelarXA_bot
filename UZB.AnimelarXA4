@@ -1,0 +1,5 @@
+UZB.animelarxa_bot/
+│
+├── mani.py
+├── requirements.txt
+└── Procfile
