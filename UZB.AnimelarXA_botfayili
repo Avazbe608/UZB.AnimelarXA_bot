@@ -1,3 +1,4 @@
+web: python mani.py
 UZB.animelarxa_bot/
 │
 ├── mani.py
