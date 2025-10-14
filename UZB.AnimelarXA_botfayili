@@ -7,6 +7,10 @@ UZB.animelarxa_bot/
 aiogram
 requests
 python-dotenv
+aiogram==2.25.1
+aiohttp
+python-dotenv
+
 
 # main.py
 import json
