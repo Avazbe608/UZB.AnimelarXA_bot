@@ -10,6 +10,7 @@ python-dotenv
 aiogram==2.25.1
 aiohttp
 python-dotenv
+from aiogram import Bot, Dispatcher, types
 
 
 # main.py
