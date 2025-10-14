@@ -1,3 +1,8 @@
+UZB.animelarxa_bot/
+│
+├── mani.py
+├── requirements.txt
+└── Procfile
 # main.py
 import json
 import logging
