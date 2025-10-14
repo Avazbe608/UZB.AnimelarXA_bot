@@ -3,6 +3,11 @@ UZB.animelarxa_bot/
 ├── mani.py
 ├── requirements.txt
 └── Procfile
+# UZB_AnimelarXA_bot
+aiogram
+requests
+python-dotenv
+
 # main.py
 import json
 import logging
