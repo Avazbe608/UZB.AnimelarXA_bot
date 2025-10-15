@@ -104,3 +104,4 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(button))
     print("Bot ishga tushdi...")
     app.run_polling()
+worker: python mani.py
